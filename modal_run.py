@@ -3,6 +3,7 @@
     modal run modal_run.py                          # chain task, all five models, seed 1337
     modal run modal_run.py --task shakespeare --steps 3000
     modal run modal_run.py --seed 1 --tag seed1     # a second seed
+    MODAL_GPU=A10G modal run modal_run.py ...       # a cheaper GPU (these models are small)
 
 Results land in out/ locally (merged compare_<task>.json and the checkpoints), as if
 `python nanoloop_moe.py --mode compare` had run here. Needs a Modal account (`pip install modal`).
@@ -22,7 +23,7 @@ image = (
 NAMES = ["standard", "plainloop", "loopmoe_k1", "loopmoe_nomix", "loopmoe"]
 
 
-@app.function(image=image, gpu="H100", timeout=3 * 3600)
+@app.function(image=image, gpu=os.environ.get("MODAL_GPU", "H100"), timeout=4 * 3600)
 def train_one(name: str, flags: list[str]) -> dict:
     os.chdir("/root/work")
     subprocess.run(["python", "nanoloop_moe.py", "--mode", "compare", "--only", name, *flags], check=True)

@@ -4,6 +4,8 @@
     modal run modal_run.py --task shakespeare --steps 3000
     modal run modal_run.py --seed 1 --tag seed1     # a second seed
     MODAL_GPU=A10G modal run modal_run.py ...       # a cheaper GPU (these models are small)
+    modal run --detach modal_run.py ...             # keeps running if this terminal closes; results on the
+                                                    # volume: modal volume get nanoloop-moe-out <file> out/
 
 Results land in out/ locally (merged compare_<task>.json and the checkpoints), as if
 `python nanoloop_moe.py --mode compare` had run here. Needs a Modal account (`pip install modal`).
@@ -20,16 +22,23 @@ image = (
     .pip_install("torch==2.5.1", "numpy")
     .add_local_file("nanoloop_moe.py", "/root/work/nanoloop_moe.py")
 )
+vol = modal.Volume.from_name("nanoloop-moe-out", create_if_missing=True)
 NAMES = ["standard", "plainloop", "loopmoe_k1", "loopmoe_nomix", "loopmoe"]
 
 
-@app.function(image=image, gpu=os.environ.get("MODAL_GPU", "H100"), timeout=4 * 3600)
-def train_one(name: str, flags: list[str]) -> dict:
+@app.function(image=image, gpu=os.environ.get("MODAL_GPU", "H100"), timeout=4 * 3600, volumes={"/vol": vol})
+def train_one(name: str, flags: list[str], suffix: str = "") -> dict:
     os.chdir("/root/work")
     subprocess.run(["python", "nanoloop_moe.py", "--mode", "compare", "--only", name, *flags], check=True)
     task = flags[flags.index("--task") + 1]
     row = json.load(open(f"out/compare_{task}.json"))[name]
-    return {"name": name, "row": row, "ckpt": open(f"out/{task}_{name}.pt", "rb").read()}
+    ckpt = open(f"out/{task}_{name}.pt", "rb").read()
+    # Also keep a copy on a Modal volume, so a run started with --detach survives a closed laptop:
+    # modal volume get nanoloop-moe-out <file> out/
+    open(f"/vol/{task}_{name}{suffix}.pt", "wb").write(ckpt)
+    json.dump(row, open(f"/vol/{task}_{name}{suffix}.json", "w"))
+    vol.commit()
+    return {"name": name, "row": row, "ckpt": ckpt}
 
 
 @app.local_entrypoint()
@@ -39,7 +48,7 @@ def main(task: str = "chain", steps: int = 0, seed: int = 1337, tag: str = "", o
     suffix = f"_{tag}" if tag else ""
     os.makedirs("out", exist_ok=True)
     path = f"out/compare_{task}{suffix}.json"
-    for r in train_one.starmap([(n, flags) for n in names]):
+    for r in train_one.starmap([(n, flags, suffix) for n in names]):
         open(f"out/{task}_{r['name']}{suffix}.pt", "wb").write(r["ckpt"])
         print(r["name"], {k: v for k, v in r["row"].items() if k != "sweep"})
         results = json.load(open(path)) if os.path.exists(path) else {}  # re-read: runs may share the file

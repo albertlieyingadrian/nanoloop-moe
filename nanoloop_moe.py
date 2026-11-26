@@ -676,13 +676,14 @@ def print_lens(out):
 
 # ----------------------------------------------------------------------------- plots
 
-def plot(path="assets"):
+def plot(suffix="", path="assets"):
+    """assets/k_sweep.png from out/compare_chain<suffix>.json and assets/lens.png from out/lens<suffix>.json."""
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     os.makedirs(path, exist_ok=True)
-    if os.path.exists("out/compare_chain.json"):
-        res = json.load(open("out/compare_chain.json"))
+    if os.path.exists(f := f"out/compare_chain{suffix}.json"):
+        res = json.load(open(f))
         fig, ax = plt.subplots(figsize=(6.4, 3.8))
         for name, r in res.items():
             Ks = sorted(r["sweep"], key=int)
@@ -693,23 +694,26 @@ def plot(path="assets"):
         ax.grid(alpha=0.3)
         fig.tight_layout()
         fig.savefig(f"{path}/k_sweep.png", dpi=150)
-    if os.path.exists("out/lens.json"):
-        res = json.load(open("out/lens.json"))
-        fig, axes = plt.subplots(1, 2, figsize=(11, 3.8), sharey=True, gridspec_kw={"width_ratios": [3, 2]})
-        for ax, name, keys in ((axes[0], "loopmoe", ("act_in", "mlp_in", "mix")), (axes[1], "plainloop", ("act_in",))):
-            if name not in res:
-                continue
+    if os.path.exists(f := f"out/lens{suffix}.json"):
+        res = json.load(open(f))
+        panels = [n for n in ("loopmoe", "loopmoe_k1", "plainloop") if n in res]
+        fig, axes = plt.subplots(1, len(panels), figsize=(5 * len(panels), 3.8), sharey=True, squeeze=False,
+                                 gridspec_kw={"width_ratios": [len(res[n]["visits"]) for n in panels]})
+        titles = {"loopmoe": "looped MoE (K=3)", "loopmoe_k1": "looped MoE trained at K=1",
+                  "plainloop": "plain loop, one residual stream"}
+        labels = {"act_in": "logit lens (active block)", "mlp_in": "visit's own MoE-input mix",
+                  "mix": "mix lens (final_input)"}
+        for ax, name in zip(axes[0], panels):
             r = res[name]
-            for k in keys:
-                ax.plot(r[k], marker=".", label={"act_in": "logit lens (active block)" if name == "loopmoe"
-                                                 else "logit lens (residual stream)",
-                                                 "mlp_in": "visit's MoE-input mix", "mix": "mix lens (final_input)"}[k])
+            for k in ("act_in", "mlp_in", "mix"):
+                if k in r:
+                    lab = "logit lens (residual stream)" if name == "plainloop" else labels[k]
+                    ax.plot(r[k], marker=".", label=lab)
             ax.set_xticks(range(len(r["visits"])), r["visits"], rotation=70, fontsize=7)
-            ax.set(title={"loopmoe": "looped MoE with block mixing", "plainloop": "plain loop, one stream"}[name],
-                   ylim=(0, 1.02))
+            ax.set(title=titles[name], ylim=(0, 1.02))
             ax.legend(fontsize=7)
             ax.grid(alpha=0.3)
-        axes[0].set_ylabel("top-1 is the answer at '?'")
+        axes[0][0].set_ylabel("top-1 is the answer at '?'")
         fig.tight_layout()
         fig.savefig(f"{path}/lens.png", dpi=150)
     print(f"wrote figures to {path}/")
@@ -721,7 +725,7 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--mode", default="train", choices=["train", "sample", "sweep", "compare", "score", "lens", "plot"])
     p.add_argument("--only", default="", help="compare: comma-separated subset of the five models")
-    p.add_argument("--tag", default="", help="score: checkpoint suffix, e.g. long for out/chain_loopmoe_long.pt")
+    p.add_argument("--tag", default="", help="score/lens/plot: checkpoint suffix (long = out/chain_loopmoe_long.pt)")
     for f in fields(Config):  # every Config field is a flag, e.g. --loops 5 --mix 0 --n_shared 1
         cast = (lambda s: s.lower() in ("1", "true", "yes")) if f.type is bool else f.type
         p.add_argument(f"--{f.name}", type=cast, default=None)
@@ -749,19 +753,18 @@ def main():
         model, mc = load(c.out, c.device)
         for K, a in sweep(model, mc, 8).items():
             print(f"K={K} mean {sum(a.values()) / len(a):.3f} | " + " ".join(f"{v:.2f}" for v in a.values()))
-    elif mode == "lens":  # reads out/chain_loopmoe.pt and out/chain_plainloop.pt from --mode compare
-        res = {}
-        for name in ("loopmoe", "plainloop"):
-            path = f"out/chain_{name}.pt" if "out" not in overrides else c.out.replace("loopmoe", name)
-            if os.path.exists(path):
+    elif mode == "lens":  # reads out/chain_<name>[_<tag>].pt from --mode compare, writes out/lens[_<tag>].json
+        suffix, res = (f"_{tag}" if tag else ""), {}
+        for name in ("loopmoe", "loopmoe_k1", "plainloop"):
+            if os.path.exists(path := f"out/chain_{name}{suffix}.pt"):
                 model, mc = load(path, c.device)
                 res[name] = lens(model, mc, overrides.get("loops"))
                 print(f"\n{name} ({path})")
                 print_lens(res[name])
         os.makedirs("out", exist_ok=True)
-        json.dump(res, open("out/lens.json", "w"), indent=1)
+        json.dump(res, open(f"out/lens{suffix}.json", "w"), indent=1)
     elif mode == "plot":
-        plot()
+        plot(f"_{tag}" if tag else "")
     else:  # sample
         model, mc = load(c.out, c.device)
         dev = next(model.parameters()).device

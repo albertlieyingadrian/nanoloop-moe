@@ -1,0 +1,24 @@
+name: test
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install CPU-only PyTorch
+        run: pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1 && pip install numpy ruff
+      - name: Lint
+        run: ruff check .
+      - name: Tests
+        run: python test_nanoloop_moe.py
+      - name: CLI smoke (train 20 steps, sample, lens)
+        run: |
+          python nanoloop_moe.py --mode compare --only loopmoe,plainloop --steps 20 --n_embd 32 --n_head 2 --hops 3 --block_size 40 --batch_size 8 --device cpu
+          python nanoloop_moe.py --mode sample --out out/chain_loopmoe.pt --loops 1 --device cpu
+          python nanoloop_moe.py --mode lens --device cpu

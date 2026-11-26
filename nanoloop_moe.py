@@ -694,9 +694,8 @@ def plot(suffix="", path="assets"):
         ax.grid(alpha=0.3)
         fig.tight_layout()
         fig.savefig(f"{path}/k_sweep.png", dpi=150)
-    if os.path.exists(f := f"out/lens{suffix}.json"):
-        res = json.load(open(f))
-        panels = [n for n in ("loopmoe", "loopmoe_k1", "plainloop") if n in res]
+    res = json.load(open(f)) if os.path.exists(f := f"out/lens{suffix}.json") else {}
+    if panels := [n for n in ("loopmoe", "loopmoe_k1", "plainloop") if n in res]:
         fig, axes = plt.subplots(1, len(panels), figsize=(5 * len(panels), 3.8), sharey=True, squeeze=False,
                                  gridspec_kw={"width_ratios": [len(res[n]["visits"]) for n in panels]})
         titles = {"loopmoe": "looped MoE (K=3)", "loopmoe_k1": "looped MoE trained at K=1",

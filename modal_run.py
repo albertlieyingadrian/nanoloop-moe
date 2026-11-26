@@ -39,9 +39,9 @@ def main(task: str = "chain", steps: int = 0, seed: int = 1337, tag: str = "", o
     suffix = f"_{tag}" if tag else ""
     os.makedirs("out", exist_ok=True)
     path = f"out/compare_{task}{suffix}.json"
-    results = json.load(open(path)) if os.path.exists(path) else {}
     for r in train_one.starmap([(n, flags) for n in names]):
-        results[r["name"]] = r["row"]
         open(f"out/{task}_{r['name']}{suffix}.pt", "wb").write(r["ckpt"])
         print(r["name"], {k: v for k, v in r["row"].items() if k != "sweep"})
+        results = json.load(open(path)) if os.path.exists(path) else {}  # re-read: runs may share the file
+        results[r["name"]] = r["row"]
         json.dump(results, open(path, "w"), indent=1)

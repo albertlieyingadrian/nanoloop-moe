@@ -561,7 +561,7 @@ def train(c, log=print):
 
 
 def load(path, device="auto"):
-    ckpt = torch.load(path, map_location="cpu")
+    ckpt = torch.load(path, map_location="cpu", weights_only=True)
     c = Config(**ckpt["config"])
     model = build(c)
     model.load_state_dict(ckpt["model"])
@@ -594,20 +594,25 @@ def compare(base, only=None):
             continue
         t0 = time.time()
         model = train(c, log=lambda msg, name=name: print(f"[{name}] {msg}", flush=True))
-        total, active = count_params(model)
-        row = {"params": total, "active": active, "seconds": round(time.time() - t0), "steps": c.steps}
-        if c.task == "chain":
-            row["sweep"] = sweep(model, c)
-            row["acc"] = row["sweep"][c.loops]
-            row["mean"] = sum(row["acc"].values()) / len(row["acc"])
-        else:
-            _, _, val_data = load_text()
-            row["val"] = {K: val_loss(model, val_data, c, K) for K in (1, 2, 3, 4, 6)}
-        results[name] = row
+        results[name] = {**score(model, c), "seconds": round(time.time() - t0)}
         os.makedirs("out", exist_ok=True)
         json.dump(results, open(path, "w"), indent=1)
     print_table(results)
     return results
+
+
+def score(model, c):
+    """The numbers behind a results row: parameter counts, then the K sweep (chain) or val loss per K (text)."""
+    total, active = count_params(model)
+    row = {"params": total, "active": active, "steps": c.steps}
+    if c.task == "chain":
+        row["sweep"] = sweep(model, c)
+        row["acc"] = row["sweep"][c.loops]
+        row["mean"] = sum(row["acc"].values()) / len(row["acc"])
+    else:
+        _, _, val_data = load_text()
+        row["val"] = {K: val_loss(model, val_data, c, K) for K in (1, 2, 3, 4, 6)}
+    return row
 
 
 def print_table(results):
@@ -714,13 +719,14 @@ def plot(path="assets"):
 
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--mode", default="train", choices=["train", "sample", "sweep", "compare", "lens", "plot"])
+    p.add_argument("--mode", default="train", choices=["train", "sample", "sweep", "compare", "score", "lens", "plot"])
     p.add_argument("--only", default="", help="compare: comma-separated subset of the five models")
+    p.add_argument("--tag", default="", help="score: checkpoint suffix, e.g. long for out/chain_loopmoe_long.pt")
     for f in fields(Config):  # every Config field is a flag, e.g. --loops 5 --mix 0 --n_shared 1
         cast = (lambda s: s.lower() in ("1", "true", "yes")) if f.type is bool else f.type
         p.add_argument(f"--{f.name}", type=cast, default=None)
     args = vars(p.parse_args())
-    mode, only = args.pop("mode"), [s for s in args.pop("only").split(",") if s]
+    mode, only, tag = args.pop("mode"), [s for s in args.pop("only").split(",") if s], args.pop("tag")
     overrides = {k: v for k, v in args.items() if v is not None}
     c = Config(**overrides)
     if mode == "train":
@@ -730,6 +736,15 @@ def main():
                 print(f"K={K} mean {sum(a.values()) / len(a):.3f} | " + " ".join(f"{v:.2f}" for v in a.values()))
     elif mode == "compare":
         compare(c, only)
+    elif mode == "score":  # re-score saved checkpoints: out/<task>_<name>[_<tag>].pt -> out/compare_<task>[_<tag>].json
+        suffix = f"_{tag}" if tag else ""
+        results = {}
+        for name, _ in compare_configs(c):
+            if os.path.exists(path := f"out/{c.task}_{name}{suffix}.pt"):
+                model, mc = load(path, c.device)
+                results[name] = score(model, mc)
+        json.dump(results, open(f"out/compare_{c.task}{suffix}.json", "w"), indent=1)
+        print_table(results)
     elif mode == "sweep":
         model, mc = load(c.out, c.device)
         for K, a in sweep(model, mc, 8).items():
